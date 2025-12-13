@@ -1,5 +1,7 @@
 from django.contrib.auth import get_user_model
 from django.db import models
+from django.db.models import Count, Q
+from django.utils import timezone
 
 User = get_user_model()
 
@@ -102,8 +104,6 @@ class Post(BaseModel):
         verbose_name="Изображение поста",
     )
 
-    comment_count = models.IntegerField(default=0, editable=False)
-
     class Meta:
         verbose_name = "публикация"
         verbose_name_plural = "Публикации"
@@ -112,13 +112,8 @@ class Post(BaseModel):
     def __str__(self):
         return self.title
 
-    def update_comment_count(self):
-        """Обновляет счетчик комментариев"""
-        self.comment_count = self.comments.count()
-        self.save(update_fields=["comment_count"])
 
-
-class Comment(BaseModel):
+class Comment(models.Model):
     """Комментарий"""
 
     post = models.ForeignKey(
@@ -126,21 +121,17 @@ class Comment(BaseModel):
     )
     author = models.ForeignKey(User, on_delete=models.CASCADE)
     text = models.TextField(verbose_name="Текст комментария")
+    created_at = models.DateTimeField(
+        auto_now_add=True, verbose_name="Добавлено"
+    )
 
-    class Meta(BaseModel.Meta):
+    class Meta:
         verbose_name = "комментарий"
         verbose_name_plural = "Комментарии"
         ordering = ["created_at"]
 
     def __str__(self):
         return self.text
-
-    def save(self, *args, **kwargs):
-        is_creating = not self.pk
-        super().save(*args, **kwargs)
-
-        if is_creating:
-            self.post.update_comment_count()
 
 
 class Page(BaseModel):

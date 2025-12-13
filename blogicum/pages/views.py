@@ -1,7 +1,7 @@
 from django.shortcuts import render
 
 
-def custom_403(request, exception=None):
+def custom_403(request, exception):
     return render(request, "pages/403csrf.html", status=403)
 
 

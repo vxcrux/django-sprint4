@@ -3,7 +3,7 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.mixins import LoginRequiredMixin, UserPassesTestMixin
 from django.core.paginator import Paginator
-from django.db.models import Q
+from django.db.models import Count, Q
 from django.http import Http404
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse_lazy
@@ -25,57 +25,71 @@ POSTS_PER_PAGE_ON_INDEX = 10
 POSTS_PER_PAGE_USER_PROFILE = 10
 
 
-def get_base_posts_queryset():
-    """Возвращает список с базовыми фильтрами и select_related"""
-    return Post.objects.filter(
-        pub_date__lte=timezone.now(),
-        is_published=True,
-        category__is_published=True,
-    ).select_related("author", "category", "location")
+def get_posts_queryset(include_filters=False, include_annotation_and_ordering=False):
+    """Возвращает queryset объектов Post с различными настройками"""
+    qs = Post.objects.select_related("author", "category", "location")
+
+    if include_filters:
+        qs = qs.filter(
+            pub_date__lte=timezone.now(),
+            is_published=True,
+            category__is_published=True,
+        )
+
+    if include_annotation_and_ordering:
+        qs = qs.annotate(
+            comment_count=Count("comments")
+        ).order_by("-pub_date")
+
+    return qs
+
+
+def paginate_queryset(queryset, per_page, request):
+    """Создает и возвращает объект пагинатора для данного queryset"""
+    paginator = Paginator(queryset, per_page)
+    page_number = request.GET.get("page", 1)
+    page_obj = paginator.get_page(page_number)
+    return page_obj
 
 
 @login_required
 def post_create(request):
     """Страница добавления новой публикации"""
-    if request.method == "POST":
-        form = PostForm(request.POST, request.FILES)
-        if form.is_valid():
-            post = form.save(commit=False)
-            post.author = request.user
-            post.save()
-            messages.success(request, f'Публикация "{post.title}" создана')
-            return redirect("blog:profile", username=request.user.username)
-    else:
-        form = PostForm()
+    form = PostForm(request.POST or None, request.FILES or None)
+    if form.is_valid():
+        post = form.save(commit=False)
+        post.author = request.user
+        post.save()
+        messages.success(request, f'Публикация "{post.title}" создана')
+        return redirect("blog:profile", username=request.user.username)
+
     context = {"form": form, "title": "Создание публикации"}
     return render(request, "blog/create.html", context)
 
 
 @login_required
-def post_edit(request, pk):
+def post_edit(request, post_id):
     """Редактирование существующей публикации"""
-    post = get_object_or_404(Post, pk=pk)
+    post = get_object_or_404(Post, pk=post_id)
 
     if post.author != request.user:
         messages.error(request, "У вас нет прав на редактирование этого поста")
         return redirect("blog:post_detail", post_id=post.pk)
 
-    if request.method == "POST":
-        form = PostForm(request.POST, request.FILES, instance=post)
-        if form.is_valid():
-            form.save()
-            messages.success(request, f'Публикация "{post.title}" обновлена')
-            return redirect("blog:post_detail", post_id=post.pk)
-    else:
-        form = PostForm(instance=post)
+    form = PostForm(request.POST or None, request.FILES or None, instance=post)
+    if form.is_valid():
+        form.save()
+        messages.success(request, f'Публикация "{post.title}" обновлена')
+        return redirect("blog:post_detail", post_id=post.pk)
 
     context = {"form": form, "action": "edit", "post": post}
     return render(request, "blog/create.html", context)
 
 
 @login_required
-def post_delete(request, pk):
-    post = get_object_or_404(Post, pk=pk)
+def post_delete(request, post_id):
+    """Удаление публикации"""
+    post = get_object_or_404(Post, pk=post_id)
 
     if post.author != request.user:
         messages.error(request, "У вас нет прав на удаление этого поста")
@@ -90,44 +104,42 @@ def post_delete(request, pk):
     return render(request, "blog/detail.html", context)
 
 
-def index(request):
+def post_list(request):
     """
-    Отображает главную страницу блога
+    Отображает главную страницу блога 
     со списком последних публикаций с пагинацией
     """
-    all_posts = get_base_posts_queryset()
-
-    paginator = Paginator(all_posts, POSTS_PER_PAGE_ON_INDEX)
-    page_number = request.GET.get("page", 1)
-    page_obj = paginator.get_page(page_number)
+    all_posts = get_posts_queryset(include_filters=True, include_annotation_and_ordering=True)
+    page_obj = paginate_queryset(all_posts, POSTS_PER_PAGE_ON_INDEX, request)
 
     context = {"page_obj": page_obj}
     return render(request, "blog/index.html", context)
 
 
 def post_detail(request, post_id):
-
-    qs = Post.objects.select_related(
-        "author", "category", "location"
-    ).prefetch_related("comments")
+    """Отображает полную информацию о публикации и её комментарии"""
+    qs = Post.objects.select_related("author", "category", "location").prefetch_related("comments", "comments__author")
 
     if request.user.is_authenticated:
         qs = qs.filter(Q(is_published=True) | Q(author=request.user))
     else:
         qs = qs.filter(is_published=True)
+
     try:
         post = get_object_or_404(qs, pk=post_id)
     except Http404:
         raise Http404("Post not found or access denied.")
 
-    if (
-        request.method == "POST"
-        and "comment_submit" in request.POST
-        and request.user.is_authenticated
-    ):
-        post.refresh_from_db()
-        messages.success(request, "Комментарий добавлен")
-        return redirect("blog:post_detail", post_id=post.pk)
+    if request.method == "POST" and "comment_submit" in request.POST and request.user.is_authenticated:
+        comment_form = CommentForm(request.POST or None)
+        if comment_form.is_valid():
+            comment = comment_form.save(commit=False)
+            comment.post = post
+            comment.author = request.user
+            comment.save()
+            messages.success(request, "Комментарий добавлен")
+            post.refresh_from_db()
+            return redirect("blog:post_detail", post_id=post.pk)
     else:
         comment_form = CommentForm()
 
@@ -135,23 +147,20 @@ def post_detail(request, post_id):
         "post": post,
         "form": comment_form,
         "action": "viewing",
-        "comments": post.comments.all(),
+        "comments": post.comments.all().order_by('created_at'),
     }
     return render(request, "blog/detail.html", context)
 
 
-def category_posts(request, category_slug):
-    """Отображение публикаций в категории"""
+def post_list_by_category(request, category_slug):
+    """Отображение публикаций в выбранной категории"""
     category = get_object_or_404(
         Category, slug=category_slug, is_published=True
     )
 
-    all_posts = get_base_posts_queryset().filter(category=category)
+    all_posts = get_posts_queryset(include_filters=True, include_annotation_and_ordering=True).filter(category=category)
 
-    paginator = Paginator(all_posts, POSTS_PER_PAGE_ON_INDEX)
-
-    page_number = request.GET.get("page", 1)
-    page_obj = paginator.get_page(page_number)
+    page_obj = paginate_queryset(all_posts, POSTS_PER_PAGE_ON_INDEX, request)
 
     context = {
         "category": category,
@@ -161,70 +170,63 @@ def category_posts(request, category_slug):
 
 
 def profile(request, username):
-
+    """Отображение профиля пользователя с его публикациями"""
     profile_object = get_object_or_404(User, username=username)
 
-    if request.user.is_authenticated and request.user == profile_object:
-        all_posts = profile_object.posts.all().order_by("-pub_date")
+    if request.user == profile_object and request.user.is_authenticated:
+        all_posts = get_posts_queryset(include_annotation_and_ordering=True).filter(author=profile_object)
     else:
-        all_posts = profile_object.posts.filter(
-            pub_date__lte=timezone.now(),
-            is_published=True,
-            category__is_published=True,
-        ).order_by("-pub_date")
+        all_posts = get_posts_queryset(include_filters=True, include_annotation_and_ordering=True).filter(author=profile_object)
 
-    paginator = Paginator(all_posts, POSTS_PER_PAGE_USER_PROFILE)
-    page_number = request.GET.get("page", 1)
-    page_obj = paginator.get_page(page_number)
+    page_obj = paginate_queryset(all_posts, POSTS_PER_PAGE_USER_PROFILE, request)
 
     context = {
         "profile": profile_object,
         "page_obj": page_obj,
     }
-
     return render(request, "blog/profile.html", context)
 
 
 @login_required
-def add_comment(request, post_id):
+def add_comment_to_post(request, post_id):
+    """Обработка добавления комментария"""
     post = get_object_or_404(Post, pk=post_id)
 
-    if request.method == "POST":
-        form = CommentForm(request.POST)
-        if form.is_valid():
-            comment = form.save(commit=False)
-            comment.post = post
-            comment.author = request.user
-            comment.save()
-
-            return redirect("blog:post_detail", post_id=post.pk)
+    form = CommentForm(request.POST or None)
+    if form.is_valid():
+        comment = form.save(commit=False)
+        comment.post = post
+        comment.author = request.user
+        comment.save()
+        messages.success(request, "Комментарий добавлен")
+        post.refresh_from_db()
+        return redirect("blog:post_detail", post_id=post.pk)
 
     return redirect("blog:post_detail", post_id=post.pk)
 
 
 @login_required
 def edit_comment(request, post_id, comment_id):
+    """Редактирование комментария"""
     comment = get_object_or_404(Comment, pk=comment_id, post_id=post_id)
 
     if comment.author != request.user:
         messages.error(request, "Нет прав на редактирование этого комментария")
         return redirect("blog:post_detail", post_id=post_id)
 
-    if request.method == "POST":
-        form = CommentForm(request.POST, instance=comment)
-        if form.is_valid():
-            form.save()
-            messages.success(request, "Комментарий успешно обновлен")
-            return redirect("blog:post_detail", post_id=post_id)
-    else:
-        form = CommentForm(instance=comment)
+    form = CommentForm(request.POST or None, instance=comment)
+    if form.is_valid():
+        form.save()
+        messages.success(request, "Комментарий успешно обновлен")
+        return redirect("blog:post_detail", post_id=post_id)
 
     context = {"form": form, "comment": comment, "action": "edit"}
     return render(request, "blog/comment.html", context)
 
 
 @login_required
-def comment_delete(request, post_id, comment_id):
+def delete_comment(request, post_id, comment_id):
+    """Удаление комментария"""
     comment = get_object_or_404(Comment, pk=comment_id, post_id=post_id)
     post = comment.post
 
@@ -242,12 +244,18 @@ def comment_delete(request, post_id, comment_id):
 
 
 class StaffRequiredMixin(LoginRequiredMixin, UserPassesTestMixin):
+    """
+    Миксин для проверки, является ли пользователь superuser.
+    Используется для страниц, доступных только админу
+    """
 
     def test_func(self):
         return self.request.user.is_superuser
 
 
 class PageListView(StaffRequiredMixin, ListView):
+    """Просмотр списка всех страниц"""
+
     model = Page
     template_name = "blog/page_list.html"
     context_object_name = "pages"
@@ -255,12 +263,18 @@ class PageListView(StaffRequiredMixin, ListView):
 
 
 class PageDetailView(DetailView):
+    """Просмотр одной статичной страницы"""
+
     model = Page
     template_name = "blog/page_detail.html"
     context_object_name = "page"
     slug_field = "slug"
 
     def get_queryset(self):
+        """
+        Ограничивает доступ к неопубликованным страницам
+        для тех, кто не superuser
+        """
         qs = super().get_queryset()
         if not self.request.user.is_superuser:
             return qs.filter(is_published=True)
@@ -268,6 +282,8 @@ class PageDetailView(DetailView):
 
 
 class PageCreateView(StaffRequiredMixin, CreateView):
+    """Создание новой статичной страницы"""
+
     model = Page
     form_class = PageForm
     template_name = "blog/create.html"
@@ -275,24 +291,30 @@ class PageCreateView(StaffRequiredMixin, CreateView):
 
 
 class PageUpdateView(StaffRequiredMixin, UpdateView):
+    """Редактирование статичной страницы"""
+
     model = Page
     form_class = PageForm
     template_name = "blog/create.html"
     slug_field = "slug"
 
     def get_success_url(self):
+        """URL для перенаправления после успешного обновления"""
         return reverse_lazy(
             "blog:page_detail", kwargs={"slug": self.object.slug}
         )
 
 
 class PageDeleteView(StaffRequiredMixin, DeleteView):
+    """Удаление статичной страницы"""
+
     model = Page
     template_name = "blog/confirm_delete.html"
     slug_field = "slug"
     success_url = reverse_lazy("blog:page_list")
 
     def get_context_data(self, **kwargs):
+        """Передача объекта страницы в контекст для шаблона подтверждения"""
         context = super().get_context_data(**kwargs)
         context["page"] = self.object
         context["action"] = "delete"

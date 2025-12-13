@@ -41,10 +41,19 @@ class PostAdmin(admin.ModelAdmin):
 
 @admin.register(Comment)
 class CommentAdmin(admin.ModelAdmin):
-    list_display = ("post", "author", "text", "created_at", "is_published")
-    list_filter = ("post", "author", "is_published")
+    list_display = (
+        "post",
+        "author",
+        "text",
+        "created_at",
+    )
+    list_filter = (
+        "post",
+        "author",
+    )
     search_fields = ("text",)
-    list_editable = ("is_published",)
+    list_editable = (
+    )
     autocomplete_fields = ("post", "author")
 
 
