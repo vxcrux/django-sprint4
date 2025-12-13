@@ -52,8 +52,7 @@ class CommentAdmin(admin.ModelAdmin):
         "author",
     )
     search_fields = ("text",)
-    list_editable = (
-    )
+    list_editable = ()
     autocomplete_fields = ("post", "author")
 
 

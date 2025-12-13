@@ -32,8 +32,8 @@ def profile_edit(request):
 
     if request.method == "POST" and form.is_valid():
         form.save()
-        messages.success(request, 'Профиль успешно обновлен!')
+        messages.success(request, "Профиль успешно обновлен!")
         return redirect("blog:profile", username=request.user.username)
-    
+
     context = {"form": form}
-    return render(request, "blog/user.html", context) 
+    return render(request, "blog/user.html", context)

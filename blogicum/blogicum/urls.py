@@ -8,7 +8,10 @@ urlpatterns = [
     path("", include("blog.urls", namespace="blog")),
     path("pages/", include("pages.urls")),
     path("auth/", include("users.urls", namespace="users")),
-    path("auth/registration/", include(("django.contrib.auth.urls", "auth"), namespace="auth")),
+    path(
+        "auth/registration/",
+        include(("django.contrib.auth.urls", "auth"), namespace="auth"),
+    ),
     path("login/", include("django.contrib.auth.urls")),
 ]
 

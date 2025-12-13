@@ -25,7 +25,9 @@ POSTS_PER_PAGE_ON_INDEX = 10
 POSTS_PER_PAGE_USER_PROFILE = 10
 
 
-def get_posts_queryset(include_filters=False, include_annotation_and_ordering=False):
+def get_posts_queryset(
+    include_filters=False, include_annotation_and_ordering=False
+):
     """Возвращает queryset объектов Post с различными настройками"""
     qs = Post.objects.select_related("author", "category", "location")
 
@@ -37,9 +39,7 @@ def get_posts_queryset(include_filters=False, include_annotation_and_ordering=Fa
         )
 
     if include_annotation_and_ordering:
-        qs = qs.annotate(
-            comment_count=Count("comments")
-        ).order_by("-pub_date")
+        qs = qs.annotate(comment_count=Count("comments")).order_by("-pub_date")
 
     return qs
 
@@ -106,10 +106,12 @@ def post_delete(request, post_id):
 
 def post_list(request):
     """
-    Отображает главную страницу блога 
+    Отображает главную страницу блога
     со списком последних публикаций с пагинацией
     """
-    all_posts = get_posts_queryset(include_filters=True, include_annotation_and_ordering=True)
+    all_posts = get_posts_queryset(
+        include_filters=True, include_annotation_and_ordering=True
+    )
     page_obj = paginate_queryset(all_posts, POSTS_PER_PAGE_ON_INDEX, request)
 
     context = {"page_obj": page_obj}
@@ -118,7 +120,9 @@ def post_list(request):
 
 def post_detail(request, post_id):
     """Отображает полную информацию о публикации и её комментарии"""
-    qs = Post.objects.select_related("author", "category", "location").prefetch_related("comments", "comments__author")
+    qs = Post.objects.select_related(
+        "author", "category", "location"
+    ).prefetch_related("comments", "comments__author")
 
     if request.user.is_authenticated:
         qs = qs.filter(Q(is_published=True) | Q(author=request.user))
@@ -130,7 +134,11 @@ def post_detail(request, post_id):
     except Http404:
         raise Http404("Post not found or access denied.")
 
-    if request.method == "POST" and "comment_submit" in request.POST and request.user.is_authenticated:
+    if (
+        request.method == "POST"
+        and "comment_submit" in request.POST
+        and request.user.is_authenticated
+    ):
         comment_form = CommentForm(request.POST or None)
         if comment_form.is_valid():
             comment = comment_form.save(commit=False)
@@ -147,7 +155,7 @@ def post_detail(request, post_id):
         "post": post,
         "form": comment_form,
         "action": "viewing",
-        "comments": post.comments.all().order_by('created_at'),
+        "comments": post.comments.all().order_by("created_at"),
     }
     return render(request, "blog/detail.html", context)
 
@@ -158,7 +166,9 @@ def post_list_by_category(request, category_slug):
         Category, slug=category_slug, is_published=True
     )
 
-    all_posts = get_posts_queryset(include_filters=True, include_annotation_and_ordering=True).filter(category=category)
+    all_posts = get_posts_queryset(
+        include_filters=True, include_annotation_and_ordering=True
+    ).filter(category=category)
 
     page_obj = paginate_queryset(all_posts, POSTS_PER_PAGE_ON_INDEX, request)
 
@@ -174,11 +184,17 @@ def profile(request, username):
     profile_object = get_object_or_404(User, username=username)
 
     if request.user == profile_object and request.user.is_authenticated:
-        all_posts = get_posts_queryset(include_annotation_and_ordering=True).filter(author=profile_object)
+        all_posts = get_posts_queryset(
+            include_annotation_and_ordering=True
+        ).filter(author=profile_object)
     else:
-        all_posts = get_posts_queryset(include_filters=True, include_annotation_and_ordering=True).filter(author=profile_object)
+        all_posts = get_posts_queryset(
+            include_filters=True, include_annotation_and_ordering=True
+        ).filter(author=profile_object)
 
-    page_obj = paginate_queryset(all_posts, POSTS_PER_PAGE_USER_PROFILE, request)
+    page_obj = paginate_queryset(
+        all_posts, POSTS_PER_PAGE_USER_PROFILE, request
+    )
 
     context = {
         "profile": profile_object,
