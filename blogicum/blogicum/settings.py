@@ -108,10 +108,7 @@ EMAIL_FILE_PATH = BASE_DIR / "sent_emails"
 MEDIA_URL = "/media/"
 MEDIA_ROOT = BASE_DIR / "media"
 
-CSRF_FAILURE_VIEW = "django.views.csrf.csrf_failure"
-
-handler404 = "pages.views.custom_404"
-handler500 = "pages.views.custom_500"
+CSRF_FAILURE_VIEW = "pages.views.custom_403"
 
 LOGIN_URL = "login"
 

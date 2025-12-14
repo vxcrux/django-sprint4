@@ -17,6 +17,7 @@ urlpatterns = [
 
 handler404 = "pages.views.custom_404"
 handler500 = "pages.views.custom_500"
+handler403 = "pages.views.custom_403"
 
 if settings.DEBUG:
     urlpatterns += static(

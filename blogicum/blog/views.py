@@ -3,7 +3,7 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.mixins import LoginRequiredMixin, UserPassesTestMixin
 from django.core.paginator import Paginator
-from django.db.models import Count, Q
+from django.db.models import Count
 from django.http import Http404
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse_lazy
@@ -26,12 +26,12 @@ POSTS_PER_PAGE_USER_PROFILE = 10
 
 
 def get_posts_queryset(
-    include_filters=False, include_annotation_and_ordering=False
+    apply_publication_filters=True, include_annotation_and_ordering=False
 ):
     """Возвращает queryset объектов Post с различными настройками"""
     qs = Post.objects.select_related("author", "category", "location")
 
-    if include_filters:
+    if apply_publication_filters:
         qs = qs.filter(
             pub_date__lte=timezone.now(),
             is_published=True,
@@ -44,10 +44,15 @@ def get_posts_queryset(
     return qs
 
 
-def paginate_queryset(queryset, per_page, request):
-    """Создает и возвращает объект пагинатора для данного queryset"""
+def paginate_queryset(
+    queryset, per_page, request, num_links=POSTS_PER_PAGE_ON_INDEX
+):
+    """
+    Создает и возвращает объект пагинатора для данного queryset
+    num_links: Максимальное количество видимых ссылок на страницы в пагинации
+    """
     paginator = Paginator(queryset, per_page)
-    page_number = request.GET.get("page", 1)
+    page_number = request.GET.get("page")
     page_obj = paginator.get_page(page_number)
     return page_obj
 
@@ -63,7 +68,7 @@ def post_create(request):
         messages.success(request, f'Публикация "{post.title}" создана')
         return redirect("blog:profile", username=request.user.username)
 
-    context = {"form": form, "title": "Создание публикации"}
+    context = {"form": form}
     return render(request, "blog/create.html", context)
 
 
@@ -82,7 +87,7 @@ def post_edit(request, post_id):
         messages.success(request, f'Публикация "{post.title}" обновлена')
         return redirect("blog:post_detail", post_id=post.pk)
 
-    context = {"form": form, "action": "edit", "post": post}
+    context = {"form": form}
     return render(request, "blog/create.html", context)
 
 
@@ -94,13 +99,13 @@ def post_delete(request, post_id):
     if post.author != request.user:
         messages.error(request, "У вас нет прав на удаление этого поста")
         return redirect("blog:post_detail", post_id=post.pk)
-
+    form = PostForm(request.POST or None, instance=post)
     if request.method == "POST":
         post.delete()
         messages.success(request, f'Пост "{post.title}" удален')
         return redirect("blog:profile", username=request.user.username)
 
-    context = {"post": post, "action": "delete_post_confirm"}
+    context = {"form": form}
     return render(request, "blog/detail.html", context)
 
 
@@ -110,7 +115,7 @@ def post_list(request):
     со списком последних публикаций с пагинацией
     """
     all_posts = get_posts_queryset(
-        include_filters=True, include_annotation_and_ordering=True
+        apply_publication_filters=True, include_annotation_and_ordering=True
     )
     page_obj = paginate_queryset(all_posts, POSTS_PER_PAGE_ON_INDEX, request)
 
@@ -124,38 +129,25 @@ def post_detail(request, post_id):
         "author", "category", "location"
     ).prefetch_related("comments", "comments__author")
 
-    if request.user.is_authenticated:
-        qs = qs.filter(Q(is_published=True) | Q(author=request.user))
-    else:
-        qs = qs.filter(is_published=True)
+    post = get_object_or_404(qs, pk=post_id)
 
-    try:
-        post = get_object_or_404(qs, pk=post_id)
-    except Http404:
+    is_author = post.author == request.user
+    is_hidden = (
+        not post.is_published
+        or not post.category.is_published
+        or post.pub_date > timezone.now()
+    )
+
+    if not is_author and is_hidden:
         raise Http404("Post not found or access denied.")
 
-    if (
-        request.method == "POST"
-        and "comment_submit" in request.POST
-        and request.user.is_authenticated
-    ):
-        comment_form = CommentForm(request.POST or None)
-        if comment_form.is_valid():
-            comment = comment_form.save(commit=False)
-            comment.post = post
-            comment.author = request.user
-            comment.save()
-            messages.success(request, "Комментарий добавлен")
-            post.refresh_from_db()
-            return redirect("blog:post_detail", post_id=post.pk)
-    else:
-        comment_form = CommentForm()
+    form = CommentForm(request.POST or None)
+    comments = Comment.objects.select_related("author").filter(post=post)
 
     context = {
         "post": post,
-        "form": comment_form,
-        "action": "viewing",
-        "comments": post.comments.all().order_by("created_at"),
+        "form": form,
+        "comments": comments,
     }
     return render(request, "blog/detail.html", context)
 
@@ -167,7 +159,7 @@ def post_list_by_category(request, category_slug):
     )
 
     all_posts = get_posts_queryset(
-        include_filters=True, include_annotation_and_ordering=True
+        apply_publication_filters=True, include_annotation_and_ordering=True
     ).filter(category=category)
 
     page_obj = paginate_queryset(all_posts, POSTS_PER_PAGE_ON_INDEX, request)
@@ -182,15 +174,12 @@ def post_list_by_category(request, category_slug):
 def profile(request, username):
     """Отображение профиля пользователя с его публикациями"""
     profile_object = get_object_or_404(User, username=username)
+    should_filter_published = request.user != profile_object
 
-    if request.user == profile_object and request.user.is_authenticated:
-        all_posts = get_posts_queryset(
-            include_annotation_and_ordering=True
-        ).filter(author=profile_object)
-    else:
-        all_posts = get_posts_queryset(
-            include_filters=True, include_annotation_and_ordering=True
-        ).filter(author=profile_object)
+    all_posts = get_posts_queryset(
+        apply_publication_filters=should_filter_published,
+        include_annotation_and_ordering=True,
+    ).filter(author=profile_object)
 
     page_obj = paginate_queryset(
         all_posts, POSTS_PER_PAGE_USER_PROFILE, request
@@ -215,8 +204,6 @@ def add_comment_to_post(request, post_id):
         comment.author = request.user
         comment.save()
         messages.success(request, "Комментарий добавлен")
-        post.refresh_from_db()
-        return redirect("blog:post_detail", post_id=post.pk)
 
     return redirect("blog:post_detail", post_id=post.pk)
 
@@ -236,7 +223,7 @@ def edit_comment(request, post_id, comment_id):
         messages.success(request, "Комментарий успешно обновлен")
         return redirect("blog:post_detail", post_id=post_id)
 
-    context = {"form": form, "comment": comment, "action": "edit"}
+    context = {"form": form, "comment": comment}
     return render(request, "blog/comment.html", context)
 
 
@@ -255,7 +242,7 @@ def delete_comment(request, post_id, comment_id):
         messages.success(request, "Комментарий успешно удален")
         return redirect("blog:post_detail", post_id=post.pk)
 
-    context = {"comment": comment, "post": post, "action": "delete"}
+    context = {"comment": comment}
     return render(request, "blog/comment.html", context)
 
 
